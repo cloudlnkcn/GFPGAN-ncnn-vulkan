@@ -46,8 +46,8 @@ jobs:
       - name: vulkansdk
         if: steps.cache-vulkansdk.outputs.cache-hit != 'true'
         run: |
-          wget "https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/linux/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.gz?Human=true" -O vk.tar.gz
-          mkdir vulkansdk && tar -xf vk.tar.gz -C vulkansdk
+          wget "https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/linux/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.xz?Human=true" -O vk.tar.xz
+          mkdir vulkansdk && tar -xf vk.tar.xz -C vulkansdk
           find vulkansdk -type f | grep -v -E 'vulkan|glslang' | xargs rm || true
       - name: install-opencv
         run: |
