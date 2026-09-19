@@ -1,9 +1,10 @@
 // gfpgan implemented with ncnn library
 
 #include "gfpgan.h"
+#include "gpu_flag.h"
 
 GFPGAN::GFPGAN() {
-    net.opt.use_vulkan_compute = false;
+    net.opt.use_vulkan_compute = g_use_gpu;
     net.opt.num_threads = 4;
 }
 
@@ -117,7 +118,7 @@ static void innerproduct(const ncnn::Mat &in, const float *weight,
     opt.num_threads = 4;
     opt.use_fp16_storage = false;
     opt.use_packing_layout = false;
-    opt.use_vulkan_compute = false;
+    opt.use_vulkan_compute = g_use_gpu;
     ncnn::Layer *op = ncnn::create_layer("InnerProduct");
 
     // set param
@@ -188,7 +189,7 @@ static void convolution(const ncnn::Mat &in, const float *weight, int inc, int n
     opt.num_threads = 4;
     opt.use_fp16_storage = false;
     opt.use_packing_layout = false;
-    opt.use_vulkan_compute = false;
+    opt.use_vulkan_compute = g_use_gpu;
     ncnn::Layer *op = ncnn::create_layer("Convolution");
 
     // set param

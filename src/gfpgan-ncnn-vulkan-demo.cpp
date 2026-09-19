@@ -1,8 +1,13 @@
 #include <cstdio>
+#include <cstring>
 #include <net.h>
+#include "gpu.h"
 #include "gfpgan.h"
 #include "face.h"
 #include "realesrgan.h"
+#include "gpu_flag.h"
+
+bool g_use_gpu = false;
 
 #define RESTORE_WHOLE_IMAGE 1   //0-only restore face, 1-restore whole image
 #define RESTORE_IMAGE_COLOR 0   //0-no color image, 1-coloring grayscale images
@@ -72,16 +77,27 @@ static void paste_faces_to_input_image(const cv::Mat &restored_face, cv::Mat &tr
 #endif
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s [imagepath]\n", argv[0]);
+    const char *imagepath = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--gpu") == 0) {
+            g_use_gpu = true;
+        } else {
+            imagepath = argv[i];
+        }
+    }
+    if (!imagepath) {
+        fprintf(stderr, "Usage: %s [imagepath] [--gpu]\n", argv[0]);
         return -1;
     }
 
-    const char *imagepath = argv[1];
+    if (g_use_gpu) {
+        ncnn::create_gpu_instance();
+    }
 
     cv::Mat img = cv::imread(imagepath, 1);
     if (img.empty()) {
         fprintf(stderr, "cv::imread %s failed\n", imagepath);
+        if (g_use_gpu) ncnn::destroy_gpu_instance();
         return -1;
     }
 
@@ -115,6 +131,7 @@ int main(int argc, char **argv) {
 
     }
     cv::imwrite("result.png", bg_upsample);
+    if (g_use_gpu) ncnn::destroy_gpu_instance();
 #else
     ncnn::Mat gfpgan_result;
     gfpgan.process(img, gfpgan_result);
@@ -122,6 +139,7 @@ int main(int argc, char **argv) {
     cv::Mat restored_face;
     to_ocv(gfpgan_result, restored_face);
     cv::imwrite("result.png",restored_face);
+    if (g_use_gpu) ncnn::destroy_gpu_instance();
 #endif
 
 

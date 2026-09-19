@@ -1,4 +1,5 @@
 #include "face.h"
+#include "gpu_flag.h"
 
 static inline float intersection_area(const Object &a, const Object &b) {
     cv::Rect_<float> inter = a.rect & b.rect;
@@ -158,7 +159,7 @@ generate_proposals(const ncnn::Mat &anchors, int stride, const ncnn::Mat &in_pad
 }
 
 Face::Face() {
-    net.opt.use_vulkan_compute = false;
+    net.opt.use_vulkan_compute = g_use_gpu;
     net.opt.num_threads = 4;
 }
 

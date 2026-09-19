@@ -1,7 +1,8 @@
 #include "realesrgan.h"
+#include "gpu_flag.h"
 
 RealESRGAN::RealESRGAN() {
-    net.opt.use_vulkan_compute = true;
+    net.opt.use_vulkan_compute = g_use_gpu;
     net.opt.num_threads = 4;
     scale = 2;
     tile_size = 400;
