@@ -1,99 +1,154 @@
+# Release engineering for GFPGAN-ncnn-vulkan.
+#
+# Tag-triggered (v*) three-platform build -> nihui-style portable packages
+# (one self-contained folder: binary + models/ + LICENSE + README) attached
+# to the GitHub Release. Versions are pinned here on purpose so the fork
+# works with zero repository configuration (no Actions variables needed).
+#
+# Fixes vs the original release.yml:
+# - `::set-output` (disabled by GitHub) replaced with tag-ref versioning
+# - archived create-release/upload-release-asset actions replaced with
+#   softprops/action-gh-release
+# - Windows + macOS jobs added; Linux pins ubuntu-22.04 for older glibc
+# - models are fetched from the upstream v0.0.1-models release (the repo
+#   itself carries no models/ directory) and normalized to models/
+# - trigger moved from `release: published` (which raced the release it
+#   then tried to re-create) to tag push
 
 name: release
+
 on:
-  release:
-    types: [published] # This workflow will only run when a new release is published
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
 
 env:
   APPLICATION_NAME: gfpgan-ncnn-vulkan
+  VULKAN_SDK_VERSION: "1.3.290.0"
+  OPENCV_VERSION: "4.10.0"
+  # Upstream model bundle (yolov5-blazeface + GFPGAN encoder/style + real-esrgan)
+  MODELS_URL: "https://github.com/onuralpszr/GFPGAN-ncnn-vulkan/releases/download/v0.0.1-models/GFPGAN-ncnn-models.zip"
 
 jobs:
-
-  setup:
-    runs-on: ubuntu-latest
-    outputs:
-      APPNAME: ${{ steps.get_appname.outputs.APPNAME }}
-      VERSION: ${{ steps.get_version.outputs.VERSION }}
-    steps:
-    - name: get-appname
-      id: get_appname
-      run: echo ::set-output name=APPNAME::${APPLICATION_NAME}
-    - name: get-version
-      id: get_version
-      run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
-
   ubuntu:
-    needs: [setup]
-    runs-on: ubuntu-latest
-    env:
-      PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-ubuntu
+    runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v6
-      with:
-        submodules: 'recursive'
-    - name: cache-vulkansdk
-      id: cache-vulkansdk
-      uses: actions/cache@v5
-      with:
-        path: "1.3.239.0"
-        key: vulkansdk-linux-x86_64-1.3.239.0
-    - name: vulkansdk
-      if: steps.cache-vulkansdk.outputs.cache-hit != 'true'
-      run: |
-        wget https://sdk.lunarg.com/sdk/download/1.3.239.0/linux/vulkansdk-linux-x86_64-1.3.239.0.tar.gz?Human=true -O vulkansdk-linux-x86_64-1.3.239.0.tar.gz
-        tar -xf vulkansdk-linux-x86_64-1.3.239.0.tar.gz
-        rm -rf 1.3.239.0/source 1.3.239.0/samples
-        find 1.3.239.0 -type f | grep -v -E 'vulkan|glslang' | xargs rm
-    - name: build
-      run: |
-        sudo apt update
-        sudo apt install libopencv-dev python3-opencv -y
-        export VULKAN_SDK=`pwd`/1.3.239.0/x86_64
-        mkdir build && cd build
-        cmake ../src
-        cmake --build . -j 2
-    - name: package
-      run: |
-        mkdir -p ${{ env.PACKAGENAME }}
-        cp README.md LICENSE ${{ env.PACKAGENAME }}
-        cp build/${{ needs.setup.outputs.APPNAME }} ${{ env.PACKAGENAME }}
-        strip -g ${{ env.PACKAGENAME }}/${{ needs.setup.outputs.APPNAME }}
-        cp -r models/* ${{ env.PACKAGENAME }}
-        zip -9 -r ${{ env.PACKAGENAME }}.zip ${{ env.PACKAGENAME }}
-    - name: upload
-      uses: actions/upload-artifact@v5
-      with:
-        name: ${{ env.PACKAGENAME }}
-        path: ${{ env.PACKAGENAME }}.zip
+      - uses: actions/checkout@v6
+        with:
+          submodules: "recursive"
+      - name: cache-vulkansdk
+        id: cache-vulkansdk
+        uses: actions/cache@v5
+        with:
+          path: "vulkansdk"
+          key: vulkansdk-linux-x86_64-${{ env.VULKAN_SDK_VERSION }}
+      - name: vulkansdk
+        if: steps.cache-vulkansdk.outputs.cache-hit != 'true'
+        run: |
+          wget "https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/linux/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.gz?Human=true" -O vk.tar.gz
+          mkdir vulkansdk && tar -xf vk.tar.gz -C vulkansdk
+          find vulkansdk -type f | grep -v -E 'vulkan|glslang' | xargs rm || true
+      - name: install-opencv
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopencv-dev
+      - name: build
+        run: |
+          export VULKAN_SDK="$(pwd)/vulkansdk/${VULKAN_SDK_VERSION}/x86_64"
+          mkdir build && cd build
+          cmake ../src
+          cmake --build . -j "$(nproc)"
+      - name: package
+        run: ./scripts/package.sh ubuntu
+      - uses: actions/upload-artifact@v5
+        with:
+          name: gfpgan-ncnn-vulkan-ubuntu
+          path: gfpgan-ncnn-vulkan-*-ubuntu.zip
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: "recursive"
+      - name: cache-vulkansdk
+        id: cache-vulkansdk
+        uses: actions/cache@v5
+        with:
+          path: "VulkanSDK"
+          key: vulkansdk-windows-${{ env.VULKAN_SDK_VERSION }}
+      - name: vulkansdk
+        if: steps.cache-vulkansdk.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/${env:VULKAN_SDK_VERSION}/windows/VulkanSDK-${env:VULKAN_SDK_VERSION}-Installer.exe?Human=true" -OutFile VulkanSDK-Installer.exe
+          7z x -aoa ./VulkanSDK-Installer.exe -oVulkanSDK
+          Remove-Item .\VulkanSDK\Demos -Recurse -ErrorAction SilentlyContinue
+      - name: cache-opencv
+        id: cache-opencv
+        uses: actions/cache@v5
+        with:
+          path: "OpenCV"
+          key: opencv-windows-${{ env.OPENCV_VERSION }}
+      - name: opencv
+        if: steps.cache-opencv.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/opencv/opencv/releases/download/${env:OPENCV_VERSION}/opencv-${env:OPENCV_VERSION}-windows.exe" -OutFile opencv.exe
+          7z x -aoa ./opencv.exe -oOpenCV
+      - name: build
+        shell: pwsh
+        run: |
+          $env:OpenCV_DIR = "$(pwd)/OpenCV/opencv/build"
+          $env:VULKAN_SDK = "$(pwd)/VulkanSDK"
+          mkdir build; cd build
+          cmake -A x64 ../src
+          cmake --build . --config Release -j 2
+      - name: package
+        shell: bash
+        run: bash ./scripts/package.sh windows
+      - uses: actions/upload-artifact@v5
+        with:
+          name: gfpgan-ncnn-vulkan-windows
+          path: gfpgan-ncnn-vulkan-*-windows.zip
+
+  macos:
+    # Best effort: ncnn+Vulkan on macOS needs the brew loader (and MoltenVK
+    # at runtime). A red macos job must not block the release.
+    runs-on: macos-13
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: "recursive"
+      - name: install-deps
+        run: brew install opencv vulkan-sdk
+      - name: build
+        run: |
+          mkdir build && cd build
+          cmake -DCMAKE_PREFIX_PATH="$(brew --prefix opencv);$(brew --prefix)" ../src
+          cmake --build . -j "$(sysctl -n hw.ncpu)"
+      - name: package
+        run: ./scripts/package.sh macos
+      - uses: actions/upload-artifact@v5
+        with:
+          name: gfpgan-ncnn-vulkan-macos
+          path: gfpgan-ncnn-vulkan-*-macos.zip
 
   release:
-    needs: [setup, ubuntu]
+    needs: [ubuntu, windows]
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
-    - name: download
-      uses: actions/download-artifact@v5
-      with:
-        path: artifacts
-
-    - name: create-release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ needs.setup.outputs.VERSION }}
-        release_name: Release ${{ needs.setup.outputs.VERSION }}
-        draft: false
-        prerelease: false
-
-    - name: upload-ubuntu
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        PACKAGENAME: ${{ needs.setup.outputs.APPNAME }}-${{ needs.setup.outputs.VERSION }}-ubuntu
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: artifacts/${{ env.PACKAGENAME }}/${{ env.PACKAGENAME }}.zip
-        asset_name: ${{ env.PACKAGENAME }}.zip
-        asset_content_type: application/zip
+      - name: download-artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: attach-to-release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.zip
+          generate_release_notes: true
