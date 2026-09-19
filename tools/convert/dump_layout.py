@@ -1,105 +1,110 @@
 #!/usr/bin/env python3
-"""Dump GFPGANv1.4 params_ema grouped into the layout src/gfpgan.cpp expects,
-with per-section float-count reconciliation against gfpgan.h's tables.
+"""Verify GFPGANv1.4's params_ema against the exact blob layout that
+src/gfpgan.cpp:load_weights reads, then optionally export style.bin.
 
-Usage:
-  python dump_layout.py --pth GFPGANv1.4.pth            # verify mapping
-  python dump_layout.py --pth GFPGANv1.4.pth --export . # write style.bin
+The blob is a raw float32-LE stream consumed strictly sequentially:
+  15 × style conv i: [modulated_conv.weight (out·hid·3·3),
+                      modulated_conv.modulation.weight (hid·512),
+                      modulated_conv.modulation.bias (hid),
+                      conv.weight (out·in·k·k, k=3 for i<=7, 1 otherwise),
+                      conv.bias (out)]
+   8 × to_rgb i:      [modulated_conv.weight (out·hid·1·1),
+                       modulated_conv.modulation.weight (hid·512),
+                       modulated_conv.modulation.bias (hid),
+                       bias (out)]
+  const_input:       4·4·512
+where (inc, hid, out) come from the C++ tables below. conv.weight sizes of 1
+are placeholders — those layers read their skip from the encoder net's blobs,
+not from a trained conv.
 """
 import argparse
 import struct
 import sys
 
-# (num_output, inc) per style conv — mirrors style_conv_channels in gfpgan.h.
-STYLE_CONV_CHANNELS = [(512, 512)] * 8 + [(256, 512), (256, 512), (128, 256),
-                                         (128, 128), (64, 128), (64, 64),
-                                         (512, 512)]
-TO_RGB_CHANNELS = [(3, 512)] * 4 + [(3, 256), (3, 128), (3, 64), (3, 512)]
+# (inc, hid, out) — mirrors style_conv_channels in gfpgan.h.
+STYLE_CONV = [(512, 512, 512)] * 8 + [
+    (512, 512, 256), (512, 256, 256), (512, 256, 128),
+    (512, 128, 128), (512, 128, 64), (512, 64, 64), (512, 512, 512),
+]
+# (hid, out) — mirrors to_rgb_channels in gfpgan.h (inc is always 512).
+TO_RGB = [(512, 3)] * 4 + [(256, 3), (128, 3), (64, 3), (512, 3)]
 STYLE_DIM = 512
+
+
+def style_conv_counts(i: int):
+    inc, hid, out = STYLE_CONV[i]
+    k = 3 if i <= 7 else 1
+    return [(out * hid * 9, ("modulated_conv.weight", (out, hid, 3, 3))),
+            (hid * STYLE_DIM, ("modulated_conv.modulation.weight", (hid, STYLE_DIM))),
+            (hid, ("modulated_conv.modulation.bias", (hid,))),
+            (out * inc * k * k, ("conv.weight", (out, inc, k, k))),
+            (out, ("conv.bias", (out,)))]
+
+
+def to_rgb_counts(i: int):
+    hid, out = TO_RGB[i]
+    return [(out * hid, ("modulated_conv.weight", (out, hid, 1, 1))),
+            (hid * STYLE_DIM, ("modulated_conv.modulation.weight", (hid, STYLE_DIM))),
+            (hid, ("modulated_conv.modulation.bias", (hid,))),
+            (out, ("bias", (out,)))]
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pth", required=True)
-    ap.add_argument("--export", metavar="OUT_DIR")
+    ap.add_argument("--export", metavar="OUT_DIR", help="write style.bin (only when all checks pass)")
     args = ap.parse_args()
 
-    import torch  # noqa: deferred — this script runs where torch exists.
+    import torch
 
     state = torch.load(args.pth, map_location="cpu")
     if isinstance(state, dict) and "params_ema" in state:
         state = state["params_ema"]
     shapes = {k: tuple(v.shape) for k, v in state.items()}
 
-    def take(prefix):
-        got = {k: s for k, s in shapes.items() if k.startswith(prefix)}
-        if not got:
-            print(f"MISSING: no keys under {prefix}*")
-        return got
-
-    def section_floats(out_ch: int, in_ch: int) -> tuple[int, list[str]]:
-        """Expected float counts + the state_dict keys for one style conv."""
-        keys = [
-            f"style_convs.{prefix}.modulated_conv.weight",
-            f"style_convs.{prefix}.modulated_conv.modulation.weight",
-            f"style_convs.{prefix}.modulated_conv.modulation.bias",
-            f"style_convs.{prefix}.conv.weight",
-            f"style_convs.{prefix}.conv.bias",
-        ]
-        counts = [out_ch * in_ch * 9, STYLE_DIM * STYLE_DIM, STYLE_DIM,
-                  out_ch * in_ch * 9, out_ch]
-        return sum(counts), keys, counts
-
     ok = True
     blob: list[float] = []
-    for i, (out_ch, in_ch) in enumerate(STYLE_CONV_CHANNELS):
-        total, keys, counts = section_floats(str(i), in_ch)
-        missing = [k for k in keys if k not in shapes]
-        shape_ok = all(shapes[k] == tuple(c for c, k2 in zip(counts, keys) if k2 == k)
-                       for k in keys if k in shapes)
-        status = "ok" if not missing and shape_ok else "MISMATCH"
-        if status != "ok":
-            ok = False
-        print(f"style_convs.{i:<2} out={out_ch:<3} in={in_ch:<3} floats={total:<9} {status}")
-        if status == "ok":
-            for k in keys:
-                blob.extend(state[k].flatten().tolist())
 
-    for i, (out_ch, in_ch) in enumerate(TO_RGB_CHANNELS):
-        keys = [
-            f"to_rgbs.{i}.modulated_conv.weight",
-            f"to_rgbs.{i}.modulated_conv.modulation.weight",
-            f"to_rgbs.{i}.modulated_conv.modulation.bias",
-            f"to_rgbs.{i}.bias",
-        ]
-        counts = [out_ch * in_ch, STYLE_DIM * STYLE_DIM, STYLE_DIM, out_ch]
-        missing = [k for k in keys if k not in shapes]
-        if missing:
-            ok = False
-            print(f"to_rgbs.{i:<2} MISSING {missing}")
-            continue
-        print(f"to_rgbs.{i:<2} out={out_ch:<2} in={in_ch:<3} floats={sum(counts):<9} ok")
-        for k in keys:
-            blob.extend(state[k].flatten().tolist())
+    for i in range(len(STYLE_CONV)):
+        for count, (suffix, expected_shape) in style_conv_counts(i):
+            key = f"style_convs.{i}.{suffix}"
+            if count == 1:
+                continue  # placeholder entry, no trained weights
+            shape = shapes.get(key)
+            if shape is None:
+                print(f"style_convs.{i:<2} {suffix:<45} MISSING")
+                ok = False
+            elif shape != expected_shape:
+                print(f"style_convs.{i:<2} {suffix:<45} SHAPE {shape} != {expected_shape}")
+                ok = False
+            else:
+                blob.extend(state[key].flatten().tolist())
+    for i in range(len(TO_RGB)):
+        for count, (suffix, expected_shape) in to_rgb_counts(i):
+            key = f"to_rgbs.{i}.{suffix}"
+            shape = shapes.get(key)
+            if shape is None:
+                print(f"to_rgbs.{i:<2} {suffix:<45} MISSING")
+                ok = False
+            elif shape != expected_shape:
+                print(f"to_rgbs.{i:<2} {suffix:<45} SHAPE {shape} != {expected_shape}")
+                ok = False
+            else:
+                blob.extend(state[key].flatten().tolist())
 
-    if "stylegan_decoder.constant_input.weight" not in shapes and \
-            "constant_input.weight" not in shapes:
-        # The constant lives under the decoder module; try both spellings.
-        const_key = next((k for k in shapes if k.endswith("constant_input.weight")), None)
-    else:
-        const_key = "stylegan_decoder.constant_input.weight"
-    if const_key:
-        n = 4 * 4 * STYLE_DIM
-        print(f"const_input      floats={n:<9} found at {const_key} "
-              f"{shapes[const_key]}")
+    const_key = next((k for k in shapes if k.endswith("constant_input.weight")), None)
+    n_const = 4 * 4 * STYLE_DIM
+    if const_key and shapes[const_key][0] * shapes[const_key][1] * shapes[const_key][2] == n_const:
+        print(f"const_input      {n_const:<9} found at {const_key} {shapes[const_key]}")
         blob.extend(state[const_key].flatten().tolist())
     else:
-        ok = False
         print("const_input      MISSING")
+        ok = False
 
-    print("MAPPING OK" if ok else "MAPPING INCOMPLETE — see MISSING/MISMATCH above")
+    print(f"total blob floats: {len(blob)}")
+    print("MAPPING OK" if ok else "MAPPING INCOMPLETE")
     if args.export and ok:
-        out = f"{args.export.rstrip('/')}/style.bin"
+        out = args.export.rstrip("/") + "/style.bin"
         with open(out, "wb") as f:
             f.write(struct.pack(f"<{len(blob)}f", *blob))
         print(f"wrote {out} ({len(blob) * 4} bytes)")
