@@ -100,7 +100,10 @@ jobs:
       - name: build
         shell: pwsh
         run: |
-          $env:OpenCV_DIR = "$(pwd)/OpenCV/opencv/build"
+          # Point straight at the vc16 package config: VS2022 computes vc17
+          # and the prebuilt Windows pack only carries vc15/vc16, which the
+          # root OpenCVConfig rejects despite binary compatibility.
+          $env:OpenCV_DIR = "$(pwd)/OpenCV/opencv/build/x64/vc16/lib"
           $env:VULKAN_SDK = "$(pwd)/VulkanSDK"
           mkdir build; cd build
           cmake -A x64 ../src
