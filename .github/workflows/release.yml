@@ -1,6 +1,7 @@
 # Release engineering for GFPGAN-ncnn-vulkan.
 #
-# Tag-triggered (v*) three-platform build -> nihui-style portable packages
+# Tag-triggered (v*) two-platform build (Ubuntu/Windows) -> nihui-style
+# portable packages
 # (one self-contained folder: binary + models/ + LICENSE + README) attached
 # to the GitHub Release. Versions are pinned here on purpose so the fork
 # works with zero repository configuration (no Actions variables needed).
@@ -116,29 +117,6 @@ jobs:
         with:
           name: gfpgan-ncnn-vulkan-windows
           path: gfpgan-ncnn-vulkan-*-windows.zip
-
-  macos:
-    # Best effort: ncnn+Vulkan on macOS needs the brew loader (and MoltenVK
-    # at runtime). A red macos job must not block the release.
-    runs-on: macos-13
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: "recursive"
-      - name: install-deps
-        run: brew install opencv vulkan-sdk
-      - name: build
-        run: |
-          mkdir build && cd build
-          cmake -DCMAKE_PREFIX_PATH="$(brew --prefix opencv);$(brew --prefix)" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ../src
-          cmake --build . -j "$(sysctl -n hw.ncpu)"
-      - name: package
-        run: ./scripts/package.sh macos
-      - uses: actions/upload-artifact@v5
-        with:
-          name: gfpgan-ncnn-vulkan-macos
-          path: gfpgan-ncnn-vulkan-*-macos.zip
 
   release:
     needs: [ubuntu, windows]
