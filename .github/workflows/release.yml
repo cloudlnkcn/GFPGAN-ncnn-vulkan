@@ -57,7 +57,7 @@ jobs:
         run: |
           export VULKAN_SDK="$(pwd)/vulkansdk/${VULKAN_SDK_VERSION}/x86_64"
           mkdir build && cd build
-          cmake ../src
+          cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ../src
           cmake --build . -j "$(nproc)"
       - name: package
         run: ./scripts/package.sh ubuntu
@@ -106,7 +106,7 @@ jobs:
           $env:OpenCV_DIR = "$(pwd)/OpenCV/opencv/build/x64/vc16/lib"
           $env:VULKAN_SDK = "$(pwd)/VulkanSDK"
           mkdir build; cd build
-          cmake -A x64 ../src
+          cmake -A x64 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ../src
           cmake --build . --config Release -j 2
       - name: package
         shell: bash
@@ -130,7 +130,7 @@ jobs:
       - name: build
         run: |
           mkdir build && cd build
-          cmake -DCMAKE_PREFIX_PATH="$(brew --prefix opencv);$(brew --prefix)" ../src
+          cmake -DCMAKE_PREFIX_PATH="$(brew --prefix opencv);$(brew --prefix)" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ../src
           cmake --build . -j "$(sysctl -n hw.ncpu)"
       - name: package
         run: ./scripts/package.sh macos
